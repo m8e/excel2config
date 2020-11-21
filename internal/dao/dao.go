@@ -28,7 +28,10 @@ type Dao interface {
 
 	LoadExcel(c context.Context, gridKey string) (sheets []*model.Sheet, err error)
 	LoadExcelSheet(c context.Context, gridKey string, indexs []string) (sheets map[string][]model.Cell, err error)
-	UpdateGridValue(c context.Context, gridKey string, req *model.UpdateGridReq) (err error)
+	UpdateGridValue(c context.Context, gridKey string, req *model.UpdateV) (err error)
+	UpdateGridMulti(c context.Context, gridKey string, req *model.UpdateRV) (err error)
+	UpdateGridConfig(c context.Context, gridKey string, req *model.UpdateCG) (err error)
+	UpdateGridCommon(c context.Context, gridKey string, req *model.UpdateCommon) (err error)
 }
 
 // dao dao.

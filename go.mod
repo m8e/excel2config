@@ -4,6 +4,7 @@ go 1.13
 
 require (
 	github.com/aws/aws-sdk-go v1.35.8 // indirect
+	github.com/fatih/gomodifytags v1.13.0 // indirect
 	github.com/go-kratos/kratos v0.5.1-0.20200526160825-521d240568d0
 	github.com/gogo/protobuf v1.3.1
 	github.com/golang/protobuf v1.4.3

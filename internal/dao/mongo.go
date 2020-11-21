@@ -75,7 +75,7 @@ func (d *dao) LoadExcelSheet(ctx context.Context, gridKey string, indexs []strin
 		filters = append(filters, bson.M{"index": index})
 	}
 	opt := options.Find()
-	opt.SetProjection(bson.D{{"celldata", true}, {"name", true}})
+	opt.SetProjection(bson.D{{"celldata", true}, {"index", true}})
 	corsor, err := c.Find(ctx, bson.M{"$or": filters}, opt)
 	if err != nil {
 		return
@@ -88,17 +88,104 @@ func (d *dao) LoadExcelSheet(ctx context.Context, gridKey string, indexs []strin
 	}
 	sheets = make(map[string][]model.Cell)
 	for _, sheet := range sheetInfos {
-		sheets[sheet.Name] = sheet.Celldata
+		sheets[sheet.Index] = sheet.Celldata
 	}
 	return
 }
 
-func (d *dao) UpdateGridValue(ctx context.Context, gridKey string, req *model.UpdateGridReq) (err error) {
+func (d *dao) UpdateGridValue(ctx context.Context, gridKey string, req *model.UpdateV) (err error) {
 	c := d.mongo.Database(dbname).Collection(gridKey)
-	filter := bson.D{{"r", req.R}, {"c", req.C}, {"index", req.I}}
-	_, err = c.UpdateOne(ctx, filter, bson.D{{"$set", bson.D{{"v", req.V}}}})
+	filter := bson.M{"index": req.I, "celldata.r": req.R, "celldata.c": req.C}
+	formatV, err := d.format2Bson(req.V)
+	if err != nil {
+		log.With("err", err).With("v", req.V).Errorln("format2bson error")
+		return
+	}
+	res, err := c.UpdateOne(ctx, filter, bson.D{{"$set", bson.D{{"celldata.$.v", formatV}}}})
 	if err != nil {
 		log.With("err", err).With("gridKey", gridKey).With("req", req).Errorln("update error")
+		return
+	}
+	if res.ModifiedCount <= 0 {
+		formatCell, err := d.format2Bson(req.Cell)
+		if err != nil {
+			log.With("err", err).With("cell", req.Cell).Errorln("format2bson error")
+			return err
+		}
+		_, err = c.UpdateOne(ctx, bson.M{"index": req.I}, bson.M{"$push": bson.M{"celldata": formatCell}})
 	}
 	return err
+}
+
+func (d *dao) UpdateGridMulti(ctx context.Context, gridKey string, req *model.UpdateRV) (err error) {
+	subIndex := 0
+	cs, ce := req.Range.Column[0], req.Range.Column[1]
+	rs, re := req.Range.Row[0], req.Range.Row[1]
+	for c := cs; c <= ce; c++ {
+		index := 0
+		for r := rs; r <= re; r++ {
+			customReq := &model.UpdateV{
+				Cell: model.Cell{
+					C: c,
+					R: r,
+					V: req.V[index][subIndex],
+				},
+				I: req.I,
+			}
+			log.With("c", c+1).With("r", r+1).With("v", req.V[index][subIndex]).Infoln("update grid")
+			err = d.UpdateGridValue(ctx, gridKey, customReq)
+			if err != nil {
+				log.With("err", err).With("req", customReq).Errorln("update error")
+				return
+			}
+			index++
+		}
+		subIndex++
+	}
+	return err
+}
+
+func (d *dao) UpdateGridConfig(ctx context.Context, gridKey string, req *model.UpdateCG) (err error) {
+	c := d.mongo.Database(dbname).Collection(gridKey)
+	filter := bson.M{"index": req.I}
+	formatV, err := d.format2Bson(map[string]interface{}{
+		"config." + req.K: req.V,
+	})
+	if err != nil {
+		log.With("err", err).With("v", req.V).Errorln("format2bson error")
+		return
+	}
+	_, err = c.UpdateOne(ctx, filter, bson.D{{"$set", formatV}})
+	if err != nil {
+		log.With("err", err).With("gridKey", gridKey).With("req", req).Errorln("update error")
+		return
+	}
+	return err
+}
+
+func (d *dao) UpdateGridCommon(ctx context.Context, gridKey string, req *model.UpdateCommon) (err error) {
+	c := d.mongo.Database(dbname).Collection(gridKey)
+	filter := bson.M{"index": req.I}
+	formatV, err := d.format2Bson(map[string]interface{}{
+		req.K: req.V,
+	})
+	if err != nil {
+		log.With("err", err).With("v", req.V).Errorln("format2bson error")
+		return
+	}
+	_, err = c.UpdateOne(ctx, filter, bson.D{{"$set", formatV}})
+	if err != nil {
+		log.With("err", err).With("gridKey", gridKey).With("req", req).Errorln("update error")
+		return
+	}
+	return err
+}
+
+func (d *dao) format2Bson(v interface{}) (doc bson.M, err error) {
+	data, err := bson.Marshal(v)
+	if err != nil {
+		return
+	}
+	err = bson.Unmarshal(data, &doc)
+	return
 }
