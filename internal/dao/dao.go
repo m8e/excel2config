@@ -32,6 +32,17 @@ type Dao interface {
 	UpdateGridMulti(c context.Context, gridKey string, req *model.UpdateRV) (err error)
 	UpdateGridConfig(c context.Context, gridKey string, req *model.UpdateCG) (err error)
 	UpdateGridCommon(c context.Context, gridKey string, req *model.UpdateCommon) (err error)
+	UpdateCalcChain(c context.Context, gridKey string, req *model.UpdateCalcChain) (err error)
+	UpdateRowColumn(c context.Context, gridKey string, req *model.UpdateRowColumn) (err error)
+	UpdateFilter(c context.Context, gridKey string, req *model.UpdateFilter) (err error)
+
+	AddSheet(c context.Context, gridKey string, req *model.AddSheet) (err error)
+	CopySheet(c context.Context, gridKey string, req *model.CopySheet) (err error)
+	DeleteSheet(c context.Context, gridKey string, req *model.DeleteSheet) (err error)
+	RecoverSheet(c context.Context, gridKey string, req *model.RecoverSheet) (err error)
+	UpdateSheetOrder(c context.Context, gridKey string, req *model.UpdateSheetOrder) (err error)
+	ToggleSheet(c context.Context, gridKey string, req *model.ToggleSheet) (err error)
+	HideOrShowSheet(c context.Context, gridKey string, req *model.HideOrShowSheet) (err error)
 }
 
 // dao dao.

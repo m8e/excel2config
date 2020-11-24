@@ -2,12 +2,14 @@ package dao
 
 import (
 	"context"
+	"encoding/json"
 	"excel2config/internal/model"
 	"github.com/prometheus/common/log"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"go.mongodb.org/mongo-driver/mongo/readpref"
+	"strconv"
 	"time"
 )
 
@@ -52,9 +54,9 @@ func (d *dao) LoadExcel(ctx context.Context, gridKey string) (sheets []*model.Sh
 		return nil, err
 	}
 	opt := options.Find()
-	opt.SetProjection(bson.D{{"name", true}, {"index", true}, {"order", true}, {"status", true}})
+	opt.SetProjection(bson.D{{"celldata", false}})
 	opt.SetSort(bson.D{{"order", 1}})
-	corsor, err := c.Find(ctx, bson.D{{"status", 0}}, opt)
+	corsor, err := c.Find(ctx, bson.D{{"status", 0}, {"deleted", bson.M{"$not": bson.M{"$eq": 1}}}}, opt)
 	if err != nil {
 		return
 	}
@@ -71,6 +73,7 @@ func (d *dao) LoadExcel(ctx context.Context, gridKey string) (sheets []*model.Sh
 func (d *dao) LoadExcelSheet(ctx context.Context, gridKey string, indexs []string) (sheets map[string][]model.Cell, err error) {
 	c := d.mongo.Database(dbname).Collection(gridKey)
 	filters := make([]bson.M, 0)
+	filters = append(filters, bson.M{"deleted": 0})
 	for _, index := range indexs {
 		filters = append(filters, bson.M{"index": index})
 	}
@@ -95,7 +98,7 @@ func (d *dao) LoadExcelSheet(ctx context.Context, gridKey string, indexs []strin
 
 func (d *dao) UpdateGridValue(ctx context.Context, gridKey string, req *model.UpdateV) (err error) {
 	c := d.mongo.Database(dbname).Collection(gridKey)
-	filter := bson.M{"index": req.I, "celldata.r": req.R, "celldata.c": req.C}
+	filter := bson.M{"index": req.I, "celldata": bson.M{"$elemMatch": bson.M{"r": req.R, "c": req.C}}}
 	formatV, err := d.format2Bson(req.V)
 	if err != nil {
 		log.With("err", err).With("v", req.V).Errorln("format2bson error")
@@ -174,6 +177,219 @@ func (d *dao) UpdateGridCommon(ctx context.Context, gridKey string, req *model.U
 		return
 	}
 	_, err = c.UpdateOne(ctx, filter, bson.D{{"$set", formatV}})
+	if err != nil {
+		log.With("err", err).With("gridKey", gridKey).With("req", req).Errorln("update error")
+		return
+	}
+	return err
+}
+
+func (d *dao) UpdateCalcChain(ctx context.Context, gridKey string, req *model.UpdateCalcChain) (err error) {
+	c := d.mongo.Database(dbname).Collection(gridKey)
+	filter := bson.M{"index": req.I}
+	cc := new(model.CalcChain)
+	err = json.Unmarshal([]byte(req.V), cc)
+	if err != nil {
+		log.With("err", err).With("v", req.V).Errorln("json unmarshal error")
+		return
+	}
+	formatV, err := d.format2Bson(cc)
+	if err != nil {
+		log.With("err", err).With("v", req.V).Errorln("format2bson error")
+		return
+	}
+	switch req.Op {
+	case "add":
+		_, err = c.UpdateOne(ctx, filter, bson.D{{"$push", bson.M{"calcChain": formatV}}})
+	case "update":
+		_, err = c.UpdateOne(ctx, filter, bson.D{{"$set", bson.M{"calcChain." + strconv.Itoa(req.Pos): formatV}}})
+	case "del":
+		_, err = c.UpdateOne(ctx, filter, bson.D{{"$unset", bson.M{"calcChain." + strconv.Itoa(req.Pos): 1}}})
+		if err != nil {
+			_, err = c.UpdateOne(ctx, filter, bson.D{{"$pull", bson.M{"calcChain": nil}}})
+		}
+	}
+	_, err = c.UpdateOne(ctx, filter, bson.D{{"$set", formatV}})
+	if err != nil {
+		log.With("err", err).With("gridKey", gridKey).With("req", req).Errorln("update error")
+		return
+	}
+	return err
+}
+
+func (d *dao) UpdateRowColumn(ctx context.Context, gridKey string, req *model.UpdateRowColumn) (err error) {
+	c := d.mongo.Database(dbname).Collection(gridKey)
+	filter := bson.M{"index": req.I}
+	switch req.T {
+	case "drc": //删除行或列
+		drs := req.V.Index
+		dre := req.V.Index + req.V.Len
+		switch req.RC {
+		case "r": //行操作
+			_, err = c.UpdateOne(ctx, filter, bson.M{"$pull": bson.M{"celldata": bson.M{"r": bson.M{"$gte": drs, "$lt": dre}}}})
+			if err == nil { //剩余行，修改行号
+				opt := &options.UpdateOptions{ArrayFilters: &options.ArrayFilters{Filters: make([]interface{}, 0)}}
+				opt.ArrayFilters.Filters = append(opt.ArrayFilters.Filters, bson.M{"elem.r": bson.M{"$gte": dre}})
+				_, err = c.UpdateMany(ctx, filter, bson.M{"$inc": bson.M{"celldata.$[elem].r": -req.V.Len}}, opt)
+			}
+			if err == nil { //总行号修改
+				_, err = c.UpdateOne(ctx, filter, bson.M{"$inc": bson.M{"row": -req.V.Len}})
+			}
+		case "c": //列操作
+			_, err = c.UpdateOne(ctx, filter, bson.M{"$pull": bson.M{"celldata": bson.M{"c": bson.M{"$gte": drs, "$lt": dre}}}})
+			if err == nil { //剩余列，修改列数
+				opt := &options.UpdateOptions{ArrayFilters: &options.ArrayFilters{Filters: make([]interface{}, 0)}}
+				opt.ArrayFilters.Filters = append(opt.ArrayFilters.Filters, bson.M{"elem.c": bson.M{"$gte": dre}})
+				_, err = c.UpdateMany(ctx, filter, bson.M{"$inc": bson.M{"celldata.$[elem].c": -req.V.Len}}, opt)
+			}
+			if err == nil { //总列数修改
+				_, err = c.UpdateOne(ctx, filter, bson.M{"$inc": bson.M{"column": -req.V.Len}})
+			}
+		}
+	case "arc": //增加行或列
+		drs := req.V.Index
+		switch req.RC {
+		case "r": //行操作
+			_, err = c.UpdateOne(ctx, filter, bson.M{"$inc": bson.M{"row": req.V.Len}})
+			if err == nil { //剩余行，修改行号
+				opt := &options.UpdateOptions{ArrayFilters: &options.ArrayFilters{Filters: make([]interface{}, 0)}}
+				opt.ArrayFilters.Filters = append(opt.ArrayFilters.Filters, bson.M{"elem.r": bson.M{"$gte": drs}})
+				_, err = c.UpdateMany(ctx, filter, bson.M{"$inc": bson.M{"celldata.$[elem].r": req.V.Len}}, opt)
+			}
+		case "c": //列操作
+			_, err = c.UpdateOne(ctx, filter, bson.M{"$inc": bson.M{"column": req.V.Len}})
+			if err == nil { //剩余列，修改列数
+				opt := &options.UpdateOptions{ArrayFilters: &options.ArrayFilters{Filters: make([]interface{}, 0)}}
+				opt.ArrayFilters.Filters = append(opt.ArrayFilters.Filters, bson.M{"elem.c": bson.M{"$gte": drs}})
+				_, err = c.UpdateMany(ctx, filter, bson.M{"$inc": bson.M{"celldata.$[elem].c": req.V.Len}}, opt)
+			}
+		}
+	}
+	if err != nil {
+		log.With("err", err).With("gridKey", gridKey).With("req", req).Errorln("update error")
+		return
+	}
+	return err
+}
+
+func (d *dao) UpdateFilter(ctx context.Context, gridKey string, req *model.UpdateFilter) (err error) {
+	c := d.mongo.Database(dbname).Collection(gridKey)
+	filter := bson.M{"index": req.I}
+	if req.V == nil {
+		_, err = c.UpdateOne(ctx, filter, bson.D{{"$unset", bson.M{"filter": "", "filter_select": ""}}})
+	} else {
+		formatFilter, _ := d.format2Bson(req.V.Filter)
+		formatFilterSelect, _ := d.format2Bson(req.V.FilterSelect)
+		_, err = c.UpdateOne(ctx, filter, bson.D{{"$set", bson.M{"filter": formatFilter, "filter_select": formatFilterSelect}}})
+	}
+	if err != nil {
+		log.With("err", err).With("gridKey", gridKey).With("req", req).Errorln("update error")
+		return
+	}
+	return err
+}
+
+func (d *dao) AddSheet(ctx context.Context, gridKey string, req *model.AddSheet) (err error) {
+	c := d.mongo.Database(dbname).Collection(gridKey)
+	formatBson, _ := d.format2Bson(req.V)
+	_, err = c.InsertOne(ctx, formatBson)
+	if err != nil {
+		log.With("err", err).With("gridKey", gridKey).With("req", req).Errorln("update error")
+		return
+	}
+	return err
+}
+
+func (d *dao) CopySheet(ctx context.Context, gridKey string, req *model.CopySheet) (err error) {
+	c := d.mongo.Database(dbname).Collection(gridKey)
+	//先查出原来sheet的数据，修改index和name之后，添加到db中
+	singleRes := c.FindOne(ctx, bson.D{{"index", req.V.CopyIndex}})
+	activeSheet := new(model.Sheet)
+	err = singleRes.Decode(activeSheet)
+	if err != nil {
+		log.With("err", err).Errorln("mongo decode error")
+		return err
+	}
+	activeSheet.Name = req.V.Name
+	activeSheet.Index = req.I
+	formatBson, _ := d.format2Bson(activeSheet)
+	_, err = c.InsertOne(ctx, formatBson)
+	if err != nil {
+		log.With("err", err).With("gridKey", gridKey).With("req", req).Errorln("update error")
+		return
+	}
+	return err
+}
+
+func (d *dao) DeleteSheet(ctx context.Context, gridKey string, req *model.DeleteSheet) (err error) {
+	c := d.mongo.Database(dbname).Collection(gridKey)
+	filter := bson.M{"index": req.V.DeleteIndex}
+	_, err = c.UpdateOne(ctx, filter, bson.M{"$set": bson.M{"deleted": 1}})
+	if err != nil {
+		log.With("err", err).With("gridKey", gridKey).With("req", req).Errorln("update error")
+		return
+	}
+	return err
+}
+
+func (d *dao) RecoverSheet(ctx context.Context, gridKey string, req *model.RecoverSheet) (err error) {
+	c := d.mongo.Database(dbname).Collection(gridKey)
+	filter := bson.M{"index": req.V.RecoverIndex}
+	_, err = c.UpdateOne(ctx, filter, bson.M{"$unset": bson.M{"deleted": ""}})
+	if err != nil {
+		log.With("err", err).With("gridKey", gridKey).With("req", req).Errorln("update error")
+		return
+	}
+	return err
+}
+
+func (d *dao) UpdateSheetOrder(ctx context.Context, gridKey string, req *model.UpdateSheetOrder) (err error) {
+	c := d.mongo.Database(dbname).Collection(gridKey)
+	for index, order := range req.V {
+		filter := bson.M{"index": index}
+		_, err = c.UpdateOne(ctx, filter, bson.M{"$set": bson.M{"order": order}})
+	}
+	if err != nil {
+		log.With("err", err).With("gridKey", gridKey).With("req", req).Errorln("update error")
+		return
+	}
+	return err
+}
+
+func (d *dao) ToggleSheet(ctx context.Context, gridKey string, req *model.ToggleSheet) (err error) {
+	c := d.mongo.Database(dbname).Collection(gridKey)
+	filter := bson.M{"status": 1}
+	_, err = c.UpdateMany(ctx, filter, bson.M{"$set": bson.M{"status": 0}})
+	if err == nil {
+		filter := bson.M{"index": req.V}
+		_, err = c.UpdateOne(ctx, filter, bson.M{"$set": bson.M{"status": 1}})
+	}
+	if err != nil {
+		log.With("err", err).With("gridKey", gridKey).With("req", req).Errorln("update error")
+		return
+	}
+	return err
+}
+
+func (d *dao) HideOrShowSheet(ctx context.Context, gridKey string, req *model.HideOrShowSheet) (err error) {
+	c := d.mongo.Database(dbname).Collection(gridKey)
+	switch req.Op {
+	case "hide":
+		filter := bson.M{"index": req.I}
+		_, err = c.UpdateMany(ctx, filter, bson.M{"$set": bson.M{"hide": req.V, "status": 0}})
+		if err == nil {
+			filter := bson.M{"index": req.Cur}
+			_, err = c.UpdateOne(ctx, filter, bson.M{"$set": bson.M{"status": 1}})
+		}
+	case "show":
+		filter := bson.M{"status": 1}
+		_, err = c.UpdateMany(ctx, filter, bson.M{"$set": bson.M{"status": 0}})
+		if err == nil {
+			filter := bson.M{"index": req.I}
+			_, err = c.UpdateOne(ctx, filter, bson.M{"$set": bson.M{"status": 1, "hide": req.V}})
+		}
+	}
+
 	if err != nil {
 		log.With("err", err).With("gridKey", gridKey).With("req", req).Errorln("update error")
 		return
