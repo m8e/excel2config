@@ -1,3 +1,4 @@
 [Server]
     addr = "0.0.0.0:8000"
     timeout = "1s"
+    crossDomains = [ "http://127.0.0.1:3000" ]

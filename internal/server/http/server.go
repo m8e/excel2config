@@ -12,8 +12,11 @@ var svc pb.SheetBMServer
 // New new a bm server.
 func New(s pb.SheetBMServer) (engine *bm.Engine, err error) {
 	var (
-		cfg bm.ServerConfig
-		ct  paladin.TOML
+		cfg struct {
+			bm.ServerConfig
+			CrossDomains []string
+		}
+		ct paladin.TOML
 	)
 	if err = paladin.Get("http.toml").Unmarshal(&ct); err != nil {
 		return
@@ -22,8 +25,8 @@ func New(s pb.SheetBMServer) (engine *bm.Engine, err error) {
 		return
 	}
 	svc = s
-	engine = bm.DefaultServer(&cfg)
-	engine.Use(bm.CORS([]string{"http://localhost:3000"}))
+	engine = bm.DefaultServer(&cfg.ServerConfig)
+	engine.Use(bm.CORS(cfg.CrossDomains))
 	pb.RegisterSheetBMServer(engine, s)
 	initRouter(engine)
 	err = engine.Start()

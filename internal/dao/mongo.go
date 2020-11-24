@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"excel2config/internal/model"
+	"github.com/go-kratos/kratos/pkg/conf/paladin"
 	"github.com/prometheus/common/log"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -16,7 +17,19 @@ import (
 const dbname = "sheets"
 
 func NewMongo() (m *mongo.Client, cf func(), err error) {
-	client, err := mongo.NewClient(options.Client().ApplyURI("mongodb://fandy:fandypeng@127.0.0.1:27017/?authSource=sheets"))
+	var (
+		ct  paladin.Map
+		cfg struct {
+			Dsn string
+		}
+	)
+	if err = paladin.Get("mongo.toml").Unmarshal(&ct); err != nil {
+		return
+	}
+	if err = ct.Get("Client").UnmarshalTOML(&cfg); err != nil {
+		return
+	}
+	client, err := mongo.NewClient(options.Client().ApplyURI(cfg.Dsn))
 	if err != nil {
 		return nil, func() {}, err
 	}
