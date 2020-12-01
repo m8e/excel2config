@@ -65,6 +65,7 @@ func (s *service) readAndServe() {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 				log.Errorln("ws socket error: %v", err)
 			}
+			log.With("err", err).Warnln("ws socket error")
 			break
 		}
 		log.Infoln("uid: ", s.uid, " recv message_type: ", messageType, ", msg: ", string(message))
