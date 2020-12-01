@@ -1,4 +1,4 @@
 [Server]
     addr = "0.0.0.0:8000"
     timeout = "1s"
-    crossDomains = [ "http://127.0.0.1:3000" ]
+    crossDomains = [ "http://127.0.0.1:3000", "http://localhost:3000", "http://e2c.fandypeng.com" ]

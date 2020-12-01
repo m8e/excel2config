@@ -18,7 +18,7 @@ const (
 	pingPeriod = 10 * time.Second
 
 	// Maximum message size allowed from peer.
-	maxMessageSize = 10240
+	maxMessageSize = 102400
 )
 
 var (
